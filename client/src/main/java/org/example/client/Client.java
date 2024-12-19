@@ -2,9 +2,23 @@ package org.example.client;
 
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
 
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.config.ConnectionConfig;
@@ -13,14 +27,22 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.client5.http.io.HttpClientConnectionManager;
+import org.apache.hc.client5.http.protocol.HttpClientContext;
+import org.apache.hc.client5.http.ssl.DefaultClientTlsStrategy;
+import org.apache.hc.client5.http.ssl.TlsSocketStrategy;
+import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.HttpEntity;
 import org.apache.hc.core5.http.io.entity.EntityUtils;
+import org.apache.hc.core5.http.io.entity.StringEntity;
 import org.apache.hc.core5.http.message.StatusLine;
 import org.apache.hc.core5.http.ssl.TLS;
 import org.apache.hc.core5.ssl.SSLContextBuilder;
+import org.apache.hc.core5.ssl.SSLContexts;
 import org.apache.hc.core5.util.TimeValue;
 import org.apache.hc.core5.util.Timeout;
 
+import okhttp3.ConnectionSpec;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -30,66 +52,81 @@ import okhttp3.Response;
 public class Client {
 
     public void postRequestApache() throws Exception {
-        final PoolingHttpClientConnectionManager cm = PoolingHttpClientConnectionManagerBuilder.create()
-                .setConnectionConfigResolver(route -> {
-                    // Use different settings for all secure (TLS) connections
-                    if (route.isSecure()) {
-                        return ConnectionConfig.custom()
-                                .setConnectTimeout(Timeout.ofMinutes(2))
-                                .setSocketTimeout(Timeout.ofMinutes(2))
-                                .setValidateAfterInactivity(TimeValue.ofMinutes(1))
-                                .setTimeToLive(TimeValue.ofHours(1))
-                                .build();
-                    }
-                    return ConnectionConfig.custom()
-                            .setConnectTimeout(Timeout.ofMinutes(1))
-                            .setSocketTimeout(Timeout.ofMinutes(1))
-                            .setValidateAfterInactivity(TimeValue.ofSeconds(15))
-                            .setTimeToLive(TimeValue.ofMinutes(15))
-                            .build();
-                })
-                .setTlsConfigResolver(host -> {
-                    // Use different settings for specific hosts
-                    if (host.getSchemeName().equalsIgnoreCase("localhost")) {
-                        return TlsConfig.custom()
-                                .setSupportedProtocols(TLS.V_1_3)
-                                .setHandshakeTimeout(Timeout.ofSeconds(10))
-                                .build();
-                    }
-                    return TlsConfig.DEFAULT;
-                })
+        final SSLContext sslContext = SSLContexts.custom()
+                .loadTrustMaterial(new File("D:\\ssl_test2_file\\truststore.p12"), "export2".toCharArray())
                 .build();
 
-        SSLContext sslContext = SSLContextBuilder.create()
-                .loadTrustMaterial(new File("D:\\SSL_Test\\truststore.p12"), "export2".toCharArray())
+        // Configure TLS strategy
+        final TlsSocketStrategy tlsStrategy = new DefaultClientTlsStrategy(sslContext);
+
+        // Create connection manager with TLS settings
+        final HttpClientConnectionManager cm = PoolingHttpClientConnectionManagerBuilder.create()
+                .setTlsSocketStrategy(tlsStrategy)
+                .setDefaultTlsConfig(TlsConfig.custom()
+                        .setHandshakeTimeout(Timeout.ofSeconds(30))
+                        .setSupportedProtocols(TLS.V_1_3)
+                        .build())
                 .build();
 
-
-        try (CloseableHttpClient httpClient = HttpClients.custom()
+        // Create HTTP client
+        try (CloseableHttpClient httpclient = HttpClients.custom()
                 .setConnectionManager(cm)
-                .build())
-        {
-            // post request setting
-            final HttpPost httppost = new HttpPost("https://localhost:8080/api/v1/mtls/connect");
+                .build()) {
 
-            httpClient.execute(httppost , response -> {
+            // Configure POST request
+            final HttpPost httppost = new HttpPost("https://localhost:8080/api/v1/mtls/connect");
+            httppost.setEntity(new StringEntity("{\"key\": \"value\"}", ContentType.parse("UTF-8")));
+            httppost.setHeader("Content-Type", "application/json");
+
+            System.out.println("Executing request " + httppost.getMethod() + " " + httppost.getUri());
+
+            // Execute request
+            final HttpClientContext clientContext = HttpClientContext.create();
+            httpclient.execute(httppost, clientContext, response -> {
                 System.out.println("----------------------------------------");
                 System.out.println(httppost + "->" + new StatusLine(response));
+                // 讀取並印出回應內容
+                String responseBody = EntityUtils.toString(response.getEntity());
+                System.out.println("Response -> " + responseBody);  // 輸出 "Connect Succeed!"
 
-                final HttpEntity resEntity = response.getEntity();
-                System.out.println("resEntity : "+resEntity);
+                EntityUtils.consume(response.getEntity());
 
-                if (resEntity != null) {
-                    System.out.println("Response content length: " + resEntity.getContentLength());
+                // Retrieve and log SSL session details
+                final SSLSession sslSession = clientContext.getSSLSession();
+                if (sslSession != null) {
+                    System.out.println("SSL protocol: " + sslSession.getProtocol());
+                    System.out.println("SSL cipher suite: " + sslSession.getCipherSuite());
                 }
-                EntityUtils.consume(response.getEntity());  // 關閉entity資源(單個)
                 return null;
             });
         }
     }
 
-    public void postRequestOKHttp() throws IOException {
-        final OkHttpClient client = new OkHttpClient();
+    public void postRequestOKHttp() throws IOException, NoSuchAlgorithmException, CertificateException, KeyStoreException, KeyManagementException {
+
+        CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509");
+        FileInputStream certInputStream = new FileInputStream("D:\\ssl_test2_file\\rootCA.pem");
+        X509Certificate caCertificate = (X509Certificate) certificateFactory.generateCertificate(certInputStream);
+
+        KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+        keyStore.load(null, null); // 初始化空的 KeyStore
+        keyStore.setCertificateEntry("rootca", caCertificate);
+
+
+        TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        trustManagerFactory.init(keyStore);
+
+
+        TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(null, trustManagers, new SecureRandom());
+
+        OkHttpClient okHttpClient = new OkHttpClient.Builder()
+                .connectionSpecs(Arrays.asList(ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS))
+                .hostnameVerifier((hostname, session) -> true)
+                .sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustManagers[0])
+                .build();
 
         RequestBody requestBody = RequestBody.create(
                 "", MediaType.get("application/json; charset=utf-8")
@@ -101,7 +138,7 @@ public class Client {
                 .post(requestBody)
                 .build();
 
-        try (Response response = client.newCall(request).execute()) {
+        try (Response response = okHttpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
             System.out.println(response.protocol());
             System.out.println(response.body().string());

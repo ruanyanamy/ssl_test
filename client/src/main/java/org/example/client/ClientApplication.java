@@ -10,7 +10,7 @@ public class ClientApplication {
         SpringApplication.run(ClientApplication.class, args);
         Client client = new Client();
         client.postRequestApache();
-        //client.postRequestOKHttp();
+        client.postRequestOKHttp();
     }
 
 }
