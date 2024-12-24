@@ -9,11 +9,14 @@ import java.security.KeyStore;
 import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.Arrays;
 
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.TrustManager;
@@ -52,7 +55,10 @@ import okhttp3.Response;
 public class Client {
 
     public void postRequestApache() throws Exception {
+        // ssl setting
+        // load keystore and truststore because of mTLS
         final SSLContext sslContext = SSLContexts.custom()
+                .loadKeyMaterial(new File("D:\\ssl_test2_file\\clientkeystore.p12"), "export3".toCharArray(), "export3".toCharArray())
                 .loadTrustMaterial(new File("D:\\ssl_test2_file\\truststore.p12"), "export2".toCharArray())
                 .build();
 
@@ -85,9 +91,9 @@ public class Client {
             httpclient.execute(httppost, clientContext, response -> {
                 System.out.println("----------------------------------------");
                 System.out.println(httppost + "->" + new StatusLine(response));
-                // 讀取並印出回應內容
+
                 String responseBody = EntityUtils.toString(response.getEntity());
-                System.out.println("Response -> " + responseBody);  // 輸出 "Connect Succeed!"
+                System.out.println("Response -> " + responseBody);
 
                 EntityUtils.consume(response.getEntity());
 
@@ -102,29 +108,40 @@ public class Client {
         }
     }
 
-    public void postRequestOKHttp() throws IOException, NoSuchAlgorithmException, CertificateException, KeyStoreException, KeyManagementException {
+    public void postRequestOKHttp() throws IOException, NoSuchAlgorithmException, CertificateException, KeyStoreException, KeyManagementException, UnrecoverableKeyException {
 
+        //trust : rootCA
         CertificateFactory certificateFactory = CertificateFactory.getInstance("X.509");
         FileInputStream certInputStream = new FileInputStream("D:\\ssl_test2_file\\rootCA.pem");
         X509Certificate caCertificate = (X509Certificate) certificateFactory.generateCertificate(certInputStream);
+
 
         KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
         keyStore.load(null, null); // 初始化空的 KeyStore
         keyStore.setCertificateEntry("rootca", caCertificate);
 
-
         TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         trustManagerFactory.init(keyStore);
-
-
         TrustManager[] trustManagers = trustManagerFactory.getTrustManagers();
 
+        //client certificate
+        keyStore = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream("D:\\ssl_test2_file\\clientkeystore.p12")) {
+            keyStore.load(fis, "export3".toCharArray());
+        }
+
+        KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        keyManagerFactory.init(keyStore, "export3".toCharArray());
+
+        KeyManager[] keyManagers = keyManagerFactory.getKeyManagers();
+
+
         SSLContext sslContext = SSLContext.getInstance("TLS");
-        sslContext.init(null, trustManagers, new SecureRandom());
+        sslContext.init(keyManagers, trustManagers, new SecureRandom());
 
         OkHttpClient okHttpClient = new OkHttpClient.Builder()
                 .connectionSpecs(Arrays.asList(ConnectionSpec.MODERN_TLS, ConnectionSpec.COMPATIBLE_TLS))
-                .hostnameVerifier((hostname, session) -> true)
+                .hostnameVerifier((hostname, session) -> "localhost".equals(hostname))
                 .sslSocketFactory(sslContext.getSocketFactory(), (X509TrustManager) trustManagers[0])
                 .build();
 
